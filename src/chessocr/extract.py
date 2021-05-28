@@ -1,13 +1,19 @@
-from line import Line, partitionLines, filterCloseLines
-from perspective import getPerspective
-from util import ratio
-from util import showImage, drawPerspective, drawBoundaries, drawContour, writeDocumentationImage
-from util import randomColor
+from .line import Line, partitionLines, filterCloseLines
+from .perspective import getPerspective
+from .util import ratio
+from .util import showImage, drawPerspective, drawBoundaries, drawContour, writeDocumentationImage
+from .util import randomColor
 
+
+__all__ = ['extractGrid', 'extractPerspective', 'extractTiles', 'ignoreContours', 'largestContour']
 
 
 import cv2
 import numpy as np
+
+
+
+
 
 
 def largestContour(contours):
@@ -51,8 +57,7 @@ def ignoreContours(img,
     for c in contours:
         i += 1
 
-        if hierarchy is not None and \
-           not hierarchy[i][2] == -1:
+        if hierarchy is not None and not hierarchy[i][2] == -1:
             continue
 
         _,_,w,h = tmp = cv2.boundingRect(c)
@@ -70,6 +75,84 @@ def ignoreContours(img,
 
     return ret
 
+
+def extractGrid(img,
+                nvertical,
+                nhorizontal,
+                threshold1 = 50,
+                threshold2 = 150,
+                apertureSize = 3,
+                hough_threshold_step=20,
+                hough_threshold_min=50,
+                hough_threshold_max=150):
+    """Finds the grid lines in a board image.
+    :param img: board image
+    :param nvertical: number of vertical lines
+    :param nhorizontal: number of horizontal lines
+    :returns: a pair (horizontal, vertical). Both elements are lists with the lines' positions.
+    """
+
+
+    w, h, _ = img.shape
+    close_threshold_v = (w / nvertical) / 4
+    close_threshold_h = (h / nhorizontal) / 4
+
+
+    im_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    thresh, im_bw = cv2.threshold(im_gray, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    im_canny = cv2.Canny(im_bw, threshold1, threshold2, apertureSize=apertureSize)
+
+    for i in range(int(hough_threshold_max - hough_threshold_min + 1) // hough_threshold_step):
+        lines = cv2.HoughLines(im_canny, 1, np.pi / 180, hough_threshold_max - (hough_threshold_step * i))
+        if lines is None:
+            continue
+
+        lines = [Line(l[0], l[1]) for l in lines[0]]
+        horizontal, vertical = partitionLines(lines)
+        vertical = filterCloseLines(vertical, horizontal=False, threshold=close_threshold_v)
+        horizontal = filterCloseLines(horizontal, horizontal=True, threshold=close_threshold_h)
+
+        if len(vertical) >= nvertical and len(horizontal) >= nhorizontal:
+            return (horizontal, vertical)
+
+
+def extractTiles(img, grid, w, h):
+    ret = []
+
+    for x in range(8):
+        v1 = grid[1][x]
+        v2 = grid[1][x+1]
+
+        for y in range(8):
+            h1 = grid[0][y]
+            h2 = grid[0][y+1]
+
+            perspective = (h1.intersect(v1),
+                           h1.intersect(v2),
+                           h2.intersect(v2),
+                           h2.intersect(v1))
+
+            tile = extractPerspective(img, perspective, w, h)
+
+            ret.append(((x,y), tile))
+
+
+    return ret
+
+
+def extractPerspective(image, perspective, w, h, dest=None):
+    if dest is None:
+        dest = ((0,0), (w, 0), (w,h), (0, h))
+
+    if perspective is None:
+        im_w, im_h,_ = image.shape
+        perspective = ((0,0), (im_w, 0), (im_w,im_h), (0, im_h))
+
+    perspective = np.array(perspective ,np.float32)
+    dest = np.array(dest ,np.float32)
+
+    coeffs = cv2.getPerspectiveTransform(perspective, dest)
+    return cv2.warpPerspective(image, coeffs, (w, h))
 
 
 def extractBoards(img, w, h):
@@ -130,84 +213,3 @@ def extractBoards(img, w, h):
 
 
     return boards
-
-
-
-def extractGrid(img,
-                nvertical,
-                nhorizontal,
-                threshold1 = 50,
-                threshold2 = 150,
-                apertureSize = 3,
-                hough_threshold_step=20,
-                hough_threshold_min=50,
-                hough_threshold_max=150):
-    """Finds the grid lines in a board image.
-    :param img: board image
-    :param nvertical: number of vertical lines
-    :param nhorizontal: number of horizontal lines
-    :returns: a pair (horizontal, vertical). Both elements are lists with the lines' positions.
-    """
-
-
-    w, h, _ = img.shape
-    close_threshold_v = (w / nvertical) / 4
-    close_threshold_h = (h / nhorizontal) / 4
-
-
-    im_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    thresh, im_bw = cv2.threshold(im_gray, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    im_canny = cv2.Canny(im_bw, threshold1, threshold2, apertureSize=apertureSize)
-
-    for i in range((hough_threshold_max - hough_threshold_min + 1) / hough_threshold_step):
-        lines = cv2.HoughLines(im_canny, 1, np.pi / 180, hough_threshold_max - (hough_threshold_step * i))
-        if lines is None:
-            continue
-
-        lines = [Line(l[0], l[1]) for l in lines[0]]
-        horizontal, vertical = partitionLines(lines)
-        vertical = filterCloseLines(vertical, horizontal=False, threshold=close_threshold_v)
-        horizontal = filterCloseLines(horizontal, horizontal=True, threshold=close_threshold_h)
-
-        if len(vertical) >= nvertical and \
-           len(horizontal) >= nhorizontal:
-            return (horizontal, vertical)
-
-
-def extractTiles(img, grid, w, h):
-    ret = []
-
-    for x in range(8):
-        v1 = grid[1][x]
-        v2 = grid[1][x+1]
-
-        for y in range(8):
-            h1 = grid[0][y]
-            h2 = grid[0][y+1]
-
-            perspective = (h1.intersect(v1),
-                           h1.intersect(v2),
-                           h2.intersect(v2),
-                           h2.intersect(v1))
-
-            tile = extractPerspective(img, perspective, w, h)
-
-            ret.append(((x,y), tile))
-
-
-    return ret
-
-
-def extractPerspective(image, perspective, w, h, dest=None):
-    if dest is None:
-        dest = ((0,0), (w, 0), (w,h), (0, h))
-
-    if perspective is None:
-        im_w, im_h,_ = image.shape
-        perspective = ((0,0), (im_w, 0), (im_w,im_h), (0, im_h))
-
-    perspective = np.array(perspective ,np.float32)
-    dest = np.array(dest ,np.float32)
-
-    coeffs = cv2.getPerspectiveTransform(perspective, dest)
-    return cv2.warpPerspective(image, coeffs, (w, h))
